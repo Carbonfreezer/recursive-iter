@@ -21,7 +21,7 @@ impl<T> Batcher<T> {
         if self.current_batch.len() >= self.batch_size {
             let content = take(&mut self.current_batch);
             self.current_batch.reserve(self.batch_size);
-            self.sender.send(content).unwrap();
+            let _ = self.sender.send(content);
         }
     }
 }
@@ -29,7 +29,7 @@ impl<T> Batcher<T> {
 impl<T> Drop for Batcher<T> {
     fn drop(&mut self) {
         if !self.current_batch.is_empty() {
-            self.sender.send(take(&mut self.current_batch)).unwrap();
+            let _ = self.sender.send(take(&mut self.current_batch));
         }
     }
 }
@@ -80,5 +80,11 @@ mod tests {
         let base_vec: Vec<(u8, u8)> = iter.collect();
 
         assert_eq!(base_vec, plain_vec, "Soluitions are not the same");
+    }
+
+    #[test]
+    fn test_take_functionality() {
+        let iter = generate_iterator(1000, |batch| hanoi_solver(0, 2, 100, batch));
+        let _: Vec<(u8, u8)> = iter.take(10).collect();
     }
 }
