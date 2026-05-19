@@ -1,4 +1,4 @@
-//! # yield-replacement
+//! # recursive-iter
 //!
 //! A lightweight utility for turning recursive functions into lazy [`Iterator`]s
 //! without collecting all results into memory first.
@@ -15,9 +15,11 @@
 //!
 //! The iterator can be short-circuited with [`Iterator::take`] or any other
 //! early-exit combinator. When the consumer drops the iterator before the producer
-//! thread has finished, subsequent [`Batcher::add_element`] calls will detect the
-//! broken channel and silently stop. The worker thread terminates cleanly without
-//! panicking.
+//! thread has finished, the next full batch triggers a panic inside the worker
+//! thread, which terminates it immediately. Because the thread is detached, the
+//! panic does not propagate to the caller. This is intentional: without it, the
+//! producer would continue an unbounded computation whose results are silently
+//! discarded.
 
 use std::mem::take;
 use std::sync::mpsc::{SyncSender, sync_channel};
@@ -56,8 +58,11 @@ impl<T> Batcher<T> {
     /// (blocking until the consumer has taken the previous batch) and a fresh
     /// allocation is prepared for the next batch.
     ///
-    /// If the consumer has dropped the iterator, the send is silently discarded
-    /// and the worker thread will return on its own — no panic occurs.
+    /// If the consumer has dropped the iterator, the send will panic, terminating
+    /// the worker thread immediately. Because the thread is detached, the panic
+    /// does not propagate to the caller. This is intentional: it stops the
+    /// producer from continuing a potentially unbounded computation whose results
+    /// are no longer needed.
     ///
     /// Call this wherever you would write `yield element` in a language that
     /// supports generator syntax.
@@ -66,7 +71,7 @@ impl<T> Batcher<T> {
         if self.current_batch.len() >= self.batch_size {
             let content = take(&mut self.current_batch);
             self.current_batch.reserve(self.batch_size);
-            let _ = self.sender.send(content);
+            self.sender.send(content).unwrap();
         }
     }
 }
@@ -110,7 +115,7 @@ impl<T> Drop for Batcher<T> {
 /// # Example
 ///
 /// ```rust
-/// use yield_replacement::{generate_iterator, Batcher};
+/// use recursive_iter::{generate_iterator, Batcher};
 ///
 /// fn hanoi(from: u8, to: u8, n: u8, out: &mut Batcher<(u8, u8)>) {
 ///     let via = 3 - from - to;

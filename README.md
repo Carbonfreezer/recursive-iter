@@ -1,4 +1,4 @@
-# yield-replacement
+# recursive-iter
 
 A lightweight Rust utility for turning recursive functions into lazy iterators —
 a stable-Rust stand-in for generator / `yield` syntax.
@@ -22,7 +22,7 @@ hanoi(0, 2, 30, &mut moves); // allocates ~10^9 elements before you see any
 ```
 
 For large inputs this is either too slow to start or simply runs out of memory.
-`yield-replacement` solves this by running the recursive function in a background
+`recursive-iter` solves this by running the recursive function in a background
 thread and streaming its output to the caller in fixed-size batches via a bounded
 channel. The caller receives a regular `Iterator` and can begin processing
 immediately.
@@ -62,9 +62,11 @@ let first_ten: Vec<_> = generate_iterator(1000, |b| hanoi(0, 2, 30, b))
     .collect();
 ```
 
-When the consumer drops the iterator before the producer has finished, subsequent
-`add_element` calls detect the broken channel and return silently. The worker
-thread terminates cleanly without panicking.
+When the consumer drops the iterator before the producer has finished, the next
+full batch triggers a panic inside the worker thread, terminating it immediately.
+Because the thread is detached, the panic does not propagate to the caller. This
+is intentional: without it, the producer would continue an unbounded computation
+whose results are silently discarded.
 
 ## How it works
 
