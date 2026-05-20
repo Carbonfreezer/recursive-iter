@@ -15,16 +15,21 @@
 //!
 //! The iterator can be short-circuited with [`Iterator::take`] or any other
 //! early-exit combinator. When the consumer drops the iterator before the producer
-//! thread has finished, the next full batch triggers a panic inside the worker
-//! thread, which terminates it immediately. Because the thread is detached, the
-//! panic does not propagate to the caller. This is intentional: without it, the
-//! producer would continue an unbounded computation whose results are silently
-//! discarded.
+//! thread has finished, the next [`Batcher::add_element`] call that attempts to
+//! send a full batch will return `Err(`[`ShouldTerminateAsSoonAsPossible`]`)`.
+//! Propagating this with `?` unwinds the recursion cleanly and the worker thread
+//! terminates without panicking. No results are silently discarded and no
+//! unbounded computation continues in the background.
 
 use std::mem::take;
 use std::sync::mpsc::{SyncSender, sync_channel};
 
 
+/// Returned by [`Batcher::add_element`] when the consumer has dropped the
+/// iterator and no further elements should be produced.
+///
+/// Propagate this with `?` in your recursive function so the call stack unwinds
+/// immediately and the worker thread terminates as soon as possible.
 pub struct ShouldTerminateAsSoonAsPossible();
 
 /// Accumulates elements produced by a recursive function and forwards them in
@@ -61,11 +66,9 @@ impl<T> Batcher<T> {
     /// (blocking until the consumer has taken the previous batch) and a fresh
     /// allocation is prepared for the next batch.
     ///
-    /// If the consumer has dropped the iterator, the send will panic, terminating
-    /// the worker thread immediately. Because the thread is detached, the panic
-    /// does not propagate to the caller. This is intentional: it stops the
-    /// producer from continuing a potentially unbounded computation whose results
-    /// are no longer needed.
+    /// Returns `Err(`[`ShouldTerminateAsSoonAsPossible`]`)` when the consumer has
+    /// dropped the iterator. Propagate this with `?` in your recursive function
+    /// to unwind the call stack and terminate the worker thread cleanly.
     ///
     /// Call this wherever you would write `yield element` in a language that
     /// supports generator syntax.
@@ -184,8 +187,8 @@ mod tests {
 
     #[test]
     fn test_take_functionality() {
-        // Early termination must not panic — the worker thread silently stops
-        // when the consumer drops the iterator.
+        // Early termination: ShouldTerminateAsSoonAsPossible propagates via `?`
+        // through the recursion, cleanly unwinding the worker thread.
         let iter = generate_iterator(1000, |batch| hanoi_solver(0, 2, 100, batch));
         let _: Vec<(u8, u8)> = iter.take(10).collect();
     }

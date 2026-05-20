@@ -29,18 +29,22 @@ immediately.
 
 ## Usage
 
-Add a `&mut Batcher<T>` parameter to your recursive function and replace every
-`out.push(x)` with `out.add_element(x)`. Then wrap the call in
-`generate_iterator`:
+Add a `&mut Batcher<T>` parameter to your recursive function, return
+`Result<(), ShouldTerminateAsSoonAsPossible>`, and replace every `out.push(x)`
+with `out.add_element(x)?`. Then wrap the call in `generate_iterator`:
 
 ```rust
-use recursive_iter::{generate_iterator, Batcher};
+use recursive_iter::{generate_iterator, Batcher, ShouldTerminateAsSoonAsPossible};
 
-fn hanoi(from: u8, to: u8, n: u8, out: &mut Batcher<(u8, u8)>) {
+fn hanoi(
+    from: u8, to: u8, n: u8,
+    out: &mut Batcher<(u8, u8)>,
+) -> Result<(), ShouldTerminateAsSoonAsPossible> {
     let via = 3 - from - to;
-    if n > 1 { hanoi(from, via, n - 1, out); }
-    out.add_element((from, to));
-    if n > 1 { hanoi(via, to, n - 1, out); }
+    if n > 1 { hanoi(from, via, n - 1, out)?; }
+    out.add_element((from, to))?;
+    if n > 1 { hanoi(via, to, n - 1, out)?; }
+    Ok(())
 }
 
 // Lazy: the background thread starts producing moves while you consume them.
@@ -62,11 +66,11 @@ let first_ten: Vec<_> = generate_iterator(1000, |b| hanoi(0, 2, 30, b))
     .collect();
 ```
 
-When the consumer drops the iterator before the producer has finished, the next
-full batch triggers a panic inside the worker thread, terminating it immediately.
-Because the thread is detached, the panic does not propagate to the caller. This
-is intentional: without it, the producer would continue an unbounded computation
-whose results are silently discarded.
+When the consumer drops the iterator, the next `add_element` call that would
+send a full batch returns `Err(ShouldTerminateAsSoonAsPossible)`. The `?`
+operator propagates this up through the recursion, unwinding the call stack and
+terminating the worker thread cleanly — no panic, no unbounded computation
+continuing in the background.
 
 ## How it works
 
@@ -88,6 +92,9 @@ whose results are silently discarded.
 - **Backpressure:** the producer thread blocks whenever it is more than one
   batch ahead of the consumer, so a slow consumer automatically throttles the
   producer.
+- **Clean early termination:** when the consumer drops the iterator,
+  `add_element` returns `Err(ShouldTerminateAsSoonAsPossible)`. Propagating
+  this with `?` unwinds the recursion immediately — no panic, no wasted work.
 - **Type safety:** `T: Send + 'static` is required because `T` crosses a thread
   boundary. Non-`Send` types (e.g. `Rc<T>`) are rejected by the compiler with a
   clear error at the call site.
