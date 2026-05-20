@@ -24,6 +24,9 @@
 use std::mem::take;
 use std::sync::mpsc::{SyncSender, sync_channel};
 
+
+pub struct ShouldTerminateAsSoonAsPossible();
+
 /// Accumulates elements produced by a recursive function and forwards them in
 /// fixed-size batches to the consumer via a bounded [`std::sync::mpsc`] channel.
 ///
@@ -66,13 +69,14 @@ impl<T> Batcher<T> {
     ///
     /// Call this wherever you would write `yield element` in a language that
     /// supports generator syntax.
-    pub fn add_element(&mut self, element: T) {
+    pub fn add_element(&mut self, element: T) -> Result<(), ShouldTerminateAsSoonAsPossible> {
         self.current_batch.push(element);
         if self.current_batch.len() >= self.batch_size {
             let content = take(&mut self.current_batch);
             self.current_batch.reserve(self.batch_size);
-            self.sender.send(content).unwrap();
+            self.sender.send(content).map_err(|_| ShouldTerminateAsSoonAsPossible())?;
         }
+        Ok(())
     }
 }
 
@@ -115,13 +119,14 @@ impl<T> Drop for Batcher<T> {
 /// # Example
 ///
 /// ```rust
-/// use recursive_iter::{generate_iterator, Batcher};
+/// use recursive_iter::{generate_iterator, Batcher, ShouldTerminateAsSoonAsPossible};
 ///
-/// fn hanoi(from: u8, to: u8, n: u8, out: &mut Batcher<(u8, u8)>) {
+/// fn hanoi(from: u8, to: u8, n: u8, out: &mut Batcher<(u8, u8)>) -> Result<(), ShouldTerminateAsSoonAsPossible>{
 ///     let via = 3 - from - to;
-///     if n > 1 { hanoi(from, via, n - 1, out); }
-///     out.add_element((from, to));
-///     if n > 1 { hanoi(via, to, n - 1, out); }
+///     if n > 1 { hanoi(from, via, n - 1, out)?; }
+///     out.add_element((from, to))?;
+///     if n > 1 { hanoi(via, to, n - 1, out)?; }
+///     Ok(())
 /// }
 ///
 /// // Iterate over all 2^20 - 1 moves without allocating a Vec of that size.
@@ -130,11 +135,11 @@ impl<T> Drop for Batcher<T> {
 /// ```
 pub fn generate_iterator<T: Send + 'static>(
     batch_size: usize,
-    start_function: impl FnOnce(&mut Batcher<T>) + Send + 'static,
+    start_function: impl FnOnce(&mut Batcher<T>) -> Result<(), ShouldTerminateAsSoonAsPossible> + Send + 'static,
 ) -> impl Iterator<Item = T> {
     let (tx, rx) = sync_channel(1);
     let mut batcher = Batcher::<T>::new(batch_size, tx);
-    std::thread::spawn(move || start_function(&mut batcher));
+    std::thread::spawn(move || {let _ = start_function(&mut batcher);});
     rx.into_iter().flatten()
 }
 
@@ -142,15 +147,16 @@ pub fn generate_iterator<T: Send + 'static>(
 mod tests {
     use super::*;
 
-    fn hanoi_solver(start_tower: u8, end_tower: u8, slices: u8, batcher: &mut Batcher<(u8, u8)>) {
+    fn hanoi_solver(start_tower: u8, end_tower: u8, slices: u8, batcher: &mut Batcher<(u8, u8)>) -> Result<(), ShouldTerminateAsSoonAsPossible> {
         let between = 3 - start_tower - end_tower;
         if slices > 1 {
-            hanoi_solver(start_tower, between, slices - 1, batcher);
+            hanoi_solver(start_tower, between, slices - 1, batcher)?;
         }
-        batcher.add_element((start_tower, end_tower));
+        batcher.add_element((start_tower, end_tower))?;
         if slices > 1 {
-            hanoi_solver(between, end_tower, slices - 1, batcher);
+            hanoi_solver(between, end_tower, slices - 1, batcher)?;
         }
+        Ok(())
     }
 
     fn flat_hanoi_solver(start_tower: u8, end_tower: u8, slices: u8, solution: &mut Vec<(u8, u8)>) {
