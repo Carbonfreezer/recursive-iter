@@ -30,7 +30,7 @@ use std::sync::mpsc::{SyncSender, sync_channel};
 ///
 /// Propagate this with `?` in your recursive function so the call stack unwinds
 /// immediately and the worker thread terminates as soon as possible.
-pub struct ShouldTerminateAsSoonAsPossible();
+pub struct ShouldTerminateAsSoonAsPossible;
 
 /// Accumulates elements produced by a recursive function and forwards them in
 /// fixed-size batches to the consumer via a bounded [`std::sync::mpsc`] channel.
@@ -77,7 +77,7 @@ impl<T> Batcher<T> {
         if self.current_batch.len() >= self.batch_size {
             let content = take(&mut self.current_batch);
             self.current_batch.reserve(self.batch_size);
-            self.sender.send(content).map_err(|_| ShouldTerminateAsSoonAsPossible())?;
+            self.sender.send(content).map_err(|_| ShouldTerminateAsSoonAsPossible)?;
         }
         Ok(())
     }
